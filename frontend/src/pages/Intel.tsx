@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
 import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -10,6 +10,7 @@ import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { api, ApiError, type RadarData, type Industry, type Announcement, type NewsItem } from "@/lib/api";
 import { loadWatch } from "@/lib/watchlist";
 import { hasLlm, chatStream } from "@/lib/llm";
+import { translateSector, titleHash, isChinese } from "@/lib/radar-translate";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -29,6 +30,9 @@ function InvestmentNewsPanel() {
   const [digests, setDigests] = useState<Record<string, Digest>>({});
   const [bulk, setBulk] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 });
   const [autoInterval, setAutoInterval] = useState<number | null>(null);
+  // 非中文标题的中文译文：hash(title) -> zh。先走 localStorage 缓存命中，未命中的批量调 AI。
+  const [zhMap, setZhMap] = useState<Record<string, string>>({});
+  const translateCtrl = useRef<AbortController | null>(null);
 
   useEffect(() => {
     api.radar().then(setData).catch((e) => setErr(e instanceof ApiError ? e.message : "加载失败"));
@@ -50,10 +54,26 @@ function InvestmentNewsPanel() {
   const cur = industries.find((i) => i.key === active) || industries[0];
   const hasData = !!data?.generated_at;
 
+  // 切换赛道 / 数据刷新后，懒翻译当前赛道的非中文标题（带缓存，未配置 AI 静默跳过）。
+  useEffect(() => {
+    if (!cur?.items?.length) return;
+    translateCtrl.current?.abort();
+    const ctrl = new AbortController();
+    translateCtrl.current = ctrl;
+    translateSector(cur.items, ctrl.signal)
+      .then((res) => { if (!ctrl.signal.aborted && Object.keys(res).length) setZhMap((m) => ({ ...m, ...res })); })
+      .catch(() => { /* 中止/失败静默：标题照显原文 */ });
+    return () => ctrl.abort();
+  }, [cur?.key, data]);
+
   const genDigest = async (ind: Industry) => {
     if (!hasLlm()) { setDigests((d) => ({ ...d, [ind.key]: { needKey: true } })); return; }
     setDigests((d) => ({ ...d, [ind.key]: { loading: true } }));
-    const ctx = ind.items.slice(0, 25).map((it) => `[${it.time}] ${it.source}｜${it.zh || it.title}`).join("\n");
+    const ctx = ind.items.slice(0, 25).map((it) => {
+      const zh = it.zh || zhMap[titleHash(it.title)];
+      const head = zh && zh !== it.title ? `${zh}（${it.title}）` : it.title;
+      return `[${it.time}] ${it.source}｜${head}`;
+    }).join("\n");
     const prompt =
       `以下是「${ind.name}」赛道近期资讯。请提炼「今日要点」3-5 条：每条一句话（≤40 字），` +
       `只客观陈述重要事件 / 趋势，不推荐标的、不预测涨跌、不构成建议。直接用「- 」列点，不要多余前后缀。\n\n${ctx}`;
@@ -174,15 +194,26 @@ function InvestmentNewsPanel() {
                 {cur.items.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground/60">近 {data!.recent_days} 天该赛道暂无更新</p>
                 ) : (
-                  cur.items.map((it, i) => (
+                  cur.items.map((it, i) => {
+                    const zh = it.zh || zhMap[titleHash(it.title)];
+                    const showZh = zh && zh !== it.title && !isChinese(it.title);
+                    return (
                     <a key={i} href={it.url} target="_blank" rel="noreferrer"
                       className="group flex items-baseline gap-3 border-b border-border/30 pb-2 text-sm last:border-0">
                       <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground/70">{it.time}</span>
                       <span className="w-20 shrink-0 truncate text-xs text-muted-foreground">{it.source}</span>
-                      <span className="flex-1 group-hover:text-primary">{it.zh || it.title}</span>
+                      {showZh ? (
+                        <span className="flex-1 min-w-0">
+                          <span className="block truncate group-hover:text-primary">{zh}</span>
+                          <span className="block truncate text-[11px] text-muted-foreground/55">{it.title}</span>
+                        </span>
+                      ) : (
+                        <span className="flex-1 truncate group-hover:text-primary">{it.title}</span>
+                      )}
                       <ExternalLink className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/0 group-hover:text-primary/60" />
                     </a>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </>
