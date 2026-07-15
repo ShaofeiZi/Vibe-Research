@@ -6,7 +6,7 @@
 // radar.json，但永远碰不到这里的缓存），所以同一条标题跨刷新不重复花 token。
 // 未配置 AI / 翻译失败 / JSON 解析失败 都静默降级：标题照显原文，不报错不阻塞。
 
-import { chatStream, hasLlm } from "./llm";
+import { chatStream, hasLlm, syncLlmFromBackend } from "./llm";
 
 const CACHE_KEY = "vr-radar-zh";
 const MAX_CACHE = 2000; // 标题短、几千条远低于 localStorage 5MB 上限
@@ -126,7 +126,13 @@ export async function translateSector(
     todo.push({ idx: i, title });
   }
   if (!todo.length) return out; // 全中文或全命中
-  if (!hasLlm()) return out; // 未配置 AI：静默，标题照显原文
+  // 未配置 AI 时先同步一次后端配置再判断：首屏时 main.tsx 的 syncLlmFromBackend 可能还没回来，
+  // localStorage 暂时为空导致 hasLlm() 误判 false、翻译静默跳过且不重试。同步后再判一次兜住竞态。
+  if (!hasLlm()) {
+    if (signal?.aborted) return out;
+    await syncLlmFromBackend();
+    if (!hasLlm()) return out; // 后端确实无配置：静默，标题照显原文
+  }
 
   // 批量上限 30，超出分块（单赛道一般 10-30 条，几乎不分块）
   for (let i = 0; i < todo.length; i += 30) {
