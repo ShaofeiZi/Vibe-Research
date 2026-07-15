@@ -25,11 +25,16 @@ import newsradar
 import portfolio as pf
 import market
 import myreports as mr
+import scheduler
 
 app = FastAPI(title="Vibe-Research API", version="0.1.3")
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
+
+# 通用定时任务调度：注册「资讯雷达定时刷新」（默认关，用户在「定时任务」页开启并设间隔）
+scheduler.register("radar", "资讯雷达刷新", newsradar.fetch_radar, 1800)
+scheduler.start()
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
@@ -108,7 +113,6 @@ def chat(req: ChatReq):
         raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
 
     cfg = req.llm.model_dump()
-
     def gen():
         try:
             events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(cfg, req.messages, req.context)
@@ -118,6 +122,9 @@ def chat(req: ChatReq):
             yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+    return {"data": {"ok": True}}
 
 
 class HoldingIn(BaseModel):
@@ -246,6 +253,39 @@ def radar_refresh():
         return {"data": newsradar.fetch_radar()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"资讯雷达刷新失败：{e}") from e
+
+
+# ---- 定时任务管理（资讯雷达定时刷新等）----
+
+class TaskUpdate(BaseModel):
+    enabled: bool | None = None
+    interval_sec: int | None = None
+
+
+@app.get("/api/tasks")
+def tasks_list():
+    """所有定时任务的状态（开关 / 间隔 / 上次执行 / 下次预估）。"""
+    return {"data": scheduler.get_tasks()}
+
+
+@app.put("/api/tasks/{key}")
+def tasks_update(key: str, u: TaskUpdate):
+    """开关 / 改间隔。间隔最低 60s。"""
+    res = scheduler.set_task(key, enabled=u.enabled, interval_sec=u.interval_sec)
+    if res is None:
+        raise HTTPException(404, f"未知任务：{key}")
+    return {"data": res}
+
+
+@app.post("/api/tasks/{key}/run")
+def tasks_run(key: str):
+    """手动立即执行一次（同步等待回调，资讯雷达约 20-40s）。"""
+    res = scheduler.run_once(key)
+    if res is None:
+        raise HTTPException(404, f"未知任务：{key}")
+    if res.get("last_status") == "error":
+        raise HTTPException(502, f"任务执行失败：{res.get('last_error')}")
+    return {"data": res}
 
 
 @app.get("/api/market/overview")

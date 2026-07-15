@@ -28,9 +28,15 @@ function InvestmentNewsPanel() {
   const [refreshing, setRefreshing] = useState(false);
   const [digests, setDigests] = useState<Record<string, Digest>>({});
   const [bulk, setBulk] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 });
+  const [autoInterval, setAutoInterval] = useState<number | null>(null);
 
   useEffect(() => {
     api.radar().then(setData).catch((e) => setErr(e instanceof ApiError ? e.message : "加载失败"));
+    // 拉一次雷达定时任务状态：开启则在刷新按钮旁提示「自动刷新中」
+    api.tasks().then((ts) => {
+      const r = ts.find((t) => t.key === "radar");
+      setAutoInterval(r?.enabled ? r.interval_sec : null);
+    }).catch(() => { /* 后端未支持定时任务时静默，不影响主流程 */ });
   }, []);
 
   const refresh = async () => {
@@ -82,6 +88,13 @@ function InvestmentNewsPanel() {
           {hasData ? `${data!.stats.total_sources} 个公开源 · 近 ${data!.recent_days} 天 · 更新于 ${data!.generated_at}` : "12 赛道 · 108 个公开源"}
         </span>
         <div className="flex items-center gap-2">
+          {autoInterval && (
+            <Link to="/tasks" title="前往定时任务管理"
+              className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-[11px] text-primary">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+              自动刷新 · 每 {Math.round(autoInterval / 60)} 分钟
+            </Link>
+          )}
           {hasData && (
             <button onClick={genAll} disabled={bulk.running || refreshing}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">

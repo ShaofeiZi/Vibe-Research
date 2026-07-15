@@ -51,7 +51,7 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function request<T>(path: string, method: "GET" | "POST" | "DELETE" = "GET", body?: unknown): Promise<T> {
+async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown): Promise<T> {
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
   const opts: RequestInit = { method };
@@ -175,6 +175,14 @@ export interface RadarData {
   stats: { industries: number; total_sources: number; failed_sources?: number };
 }
 
+// 定时任务（资讯雷达定时刷新等）
+export interface TaskState {
+  key: string; name: string;
+  enabled: boolean; interval_sec: number;
+  last_run: string | null; last_status: "ok" | "error" | "running" | null;
+  last_error: string | null; next_run_est: string | null;
+}
+
 export interface Holding {
   code: string; name: string; price: number; shares: number; cost: number;
   market_value: number; pnl: number; pnl_pct: number;
@@ -243,6 +251,10 @@ export const api = {
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
+  tasks: () => get<TaskState[]>("/tasks"),
+  updateTask: (key: string, body: { enabled?: boolean; interval_sec?: number }) =>
+    request<TaskState>(`/tasks/${key}`, "PUT", body),
+  runTask: (key: string) => request<TaskState>(`/tasks/${key}/run`, "POST"),
   portfolio: () => get<PortfolioData>("/portfolio"),
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),
