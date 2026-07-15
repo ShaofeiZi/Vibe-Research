@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { toast } from "sonner";
-import { loadLlm, saveLlm, clearLlm } from "@/lib/llm";
+import { loadLlm, saveLlm, clearLlm, syncLlmFromBackend } from "@/lib/llm";
 import { loadAccessKey, saveAccessKey } from "@/lib/api";
 import { subscriptionModels, apiModels, PROVIDER_BASE, isCliProvider, aiModels, type ProviderId } from "@/lib/ai-models";
 
@@ -23,6 +23,23 @@ export function Settings() {
   // 后端访问密钥（对应部署时的 VR_API_KEY）；本机自用不设鉴权时留空
   const [accessKey, setAccessKey] = useState(loadAccessKey());
 
+  // 进页时从后端同步配置：后端为主，刷新表单为后端已存的值
+  useEffect(() => {
+    syncLlmFromBackend().then((c) => {
+      if (!c) return;
+      if (isCliProvider(c.provider)) {
+        setMode("subscription");
+        setCliId(c.model);
+      } else {
+        setMode("api");
+        setApiId(c.model);
+        setBaseURL(c.baseURL);
+        setModelName(c.model);
+        setApiKey(c.apiKey);
+      }
+    });
+  }, []);
+
   const providerOf = (id: string): ProviderId => aiModels.find((m) => m.id === id)?.provider ?? "openai-compatible";
 
   const pickApiModel = (id: string) => {
@@ -33,30 +50,30 @@ export function Settings() {
     setBaseURL(PROVIDER_BASE[m.provider] || "");
   };
 
-  const saveApi = () => {
+  const saveApi = async () => {
     if (!baseURL.trim() || !apiKey.trim() || !modelName.trim()) {
       toast.error("请填完 Base URL、API Key、Model");
       return;
     }
-    saveLlm({ provider: providerOf(apiId), baseURL: baseURL.trim(), apiKey: apiKey.trim(), model: modelName.trim() });
-    toast.success("已保存到本地，全站「问 AI / 复盘」现在可用");
+    await saveLlm({ provider: providerOf(apiId), baseURL: baseURL.trim(), apiKey: apiKey.trim(), model: modelName.trim() });
+    toast.success("已保存到后端，全站「问 AI / 复盘」现在可用");
   };
 
-  const saveSubscription = () => {
+  const saveSubscription = async () => {
     const m = subscriptionModels.find((x) => x.id === cliId);
     if (!m || m.comingSoon) {
       toast.error("请选择一个可用的订阅（暂不支持标「即将支持」的）");
       return;
     }
-    saveLlm({ provider: m.provider, baseURL: "", apiKey: "", model: m.id });
+    await saveLlm({ provider: m.provider, baseURL: "", apiKey: "", model: m.id });
     toast.success(`已选「${m.name}」订阅，全站「问 AI / 复盘」将调用本机 ${m.name}`);
   };
 
-  const forget = () => {
-    clearLlm();
+  const forget = async () => {
+    await clearLlm();
     setApiKey("");
     setCliId("");
-    toast.success("已清除本地配置");
+    toast.success("已清除配置（后端+本地）");
   };
 
   const saveAccess = () => {
@@ -72,7 +89,7 @@ export function Settings() {
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-        <span>API key <b className="text-foreground">只存在你本地浏览器</b>，仅在你提问时发给你自己的后端去调模型，不上传、不进仓库。所有分析由你的模型给出，本产品不校准。</span>
+        <span>配置存<b className="text-foreground">后端（~/.vibe-research/）+ 本地缓存</b>，不进仓库。后端存一份让定时任务等后台场景也能用，多端共享。提问时用你的模型作答，本产品不校准。</span>
       </div>
 
       {/* 两种接入方式 */}
@@ -171,7 +188,7 @@ export function Settings() {
 
             <div className="flex items-center gap-2">
               <button onClick={saveApi} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
-                保存（存本地）
+                保存
               </button>
               {existing && (
                 <button onClick={forget} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-destructive">

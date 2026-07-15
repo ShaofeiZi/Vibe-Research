@@ -26,6 +26,7 @@ import portfolio as pf
 import market
 import myreports as mr
 import scheduler
+import aiconfig
 
 app = FastAPI(title="Vibe-Research API", version="0.1.3")
 
@@ -88,7 +89,7 @@ class LLMConfig(BaseModel):
 class ChatReq(BaseModel):
     messages: list[dict]
     context: str = ""
-    llm: LLMConfig
+    llm: LLMConfig | None = None  # 前端可省略，后端回退到已存配置（后台任务/多端共享）
 
 
 @app.post("/api/chat")
@@ -97,22 +98,26 @@ def chat(req: ChatReq):
 
     - API 接入：OpenAI 兼容 function-calling，边流答案边推工具调用事件。
     - 订阅接入（provider=cli-*）：调本机已登录的 CLI，stdout 边出边流（数据靠 context）。
-    配置错误（缺 key / 未装 CLI）走 HTTP 400；运行时错误走流内 error 事件。用户配置随请求传入，后端不持久化。
+    配置优先用请求传入的 llm；请求没带或字段不全则回退到后端已存配置（~/.vibe-research/ai-config.json）。
+    配置错误（缺 key / 未装 CLI）走 HTTP 400；运行时错误走流内 error 事件。
     """
     if not req.messages:
         raise HTTPException(400, "messages 不能为空")
-    if not req.llm.model:
+
+    # 请求带完整配置就用请求的；否则回退后端已存配置
+    req_cfg = req.llm.model_dump() if req.llm and req.llm.model else None
+    cfg = req_cfg or aiconfig.load()
+    if not cfg or not cfg.get("model"):
         raise HTTPException(400, "缺少模型配置，请先在「接入 AI」里选择")
 
-    is_cli = req.llm.provider.startswith("cli-")
+    is_cli = str(cfg.get("provider", "")).startswith("cli-")
     if is_cli:
-        kind = req.llm.provider[4:]
+        kind = cfg["provider"][4:]
         if not cli_runtime.detect_cli(kind):
             raise HTTPException(400, f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。")
-    elif not req.llm.apiKey or not req.llm.baseURL:
+    elif not cfg.get("apiKey") or not cfg.get("baseURL"):
         raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
 
-    cfg = req.llm.model_dump()
     def gen():
         try:
             events = (chat_layer.run_chat_cli_stream if is_cli else chat_layer.run_chat_stream)(cfg, req.messages, req.context)
@@ -124,6 +129,26 @@ def chat(req: ChatReq):
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
+# ---- AI 接入配置（存后端 ~/.vibe-research/ai-config.json，前端不再只存浏览器）----
+
+@app.get("/api/ai-config")
+def ai_config_get():
+    """读已存的 AI 配置。无则返回 null（前端据此显示未配置）。"""
+    return {"data": aiconfig.load()}
+
+
+@app.put("/api/ai-config")
+def ai_config_put(cfg: LLMConfig):
+    """保存 AI 配置到后端（校验不通过 400）。"""
+    saved = aiconfig.save(cfg.model_dump())
+    if saved is None:
+        raise HTTPException(400, "配置无效：CLI 订阅需选 model；API 接入需填全 baseURL / apiKey / model")
+    return {"data": saved}
+
+
+@app.delete("/api/ai-config")
+def ai_config_delete():
+    aiconfig.clear()
     return {"data": {"ok": True}}
 
 

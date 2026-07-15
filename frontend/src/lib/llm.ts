@@ -1,4 +1,5 @@
-// 用户 LLM 配置（只存本地 localStorage，不上传、不进仓库）+ 系统 AI 对话调用。
+// 用户 LLM 配置 —— 存后端（~/.vibe-research/ai-config.json）为主，localStorage 作本地缓存/首屏。
+// 历史：只存浏览器。现改后端为主，让定时任务等后台场景也能拿到配置，多端共享。
 
 import { ApiError, authHeaders } from "./api";
 import { isCliProvider, type ProviderId } from "./ai-models";
@@ -23,25 +24,59 @@ export interface ChatResult {
 
 const KEY = "vr-llm";
 
+// 校验一份配置是否完整可用（同后端 aiconfig._normalize 口径）。
+function valid(cfg: LlmConfig | null): cfg is LlmConfig {
+  if (!cfg || !cfg.model) return false;
+  return isCliProvider(cfg.provider) || (!!cfg.baseURL && !!cfg.apiKey);
+}
+
 export function loadLlm(): LlmConfig | null {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
     const c = JSON.parse(raw) as LlmConfig;
-    // 订阅(CLI)：有 model 即可，免 key；API：需 baseURL + key + model。
-    const ok = c.model && (isCliProvider(c.provider) || (c.baseURL && c.apiKey));
-    return ok ? c : null;
+    return valid(c) ? c : null;
   } catch {
     return null;
   }
 }
 
-export function saveLlm(cfg: LlmConfig) {
-  localStorage.setItem(KEY, JSON.stringify(cfg));
+// 从后端拉配置并刷入 localStorage 缓存。启动 / 进设置页时调一次。
+// 后端无配置或网络异常时静默（保留 localStorage 旧值），不抛——首屏不能因后端没起而崩。
+export async function syncLlmFromBackend(): Promise<LlmConfig | null> {
+  try {
+    const resp = await fetch("/api/ai-config", { headers: authHeaders() });
+    if (!resp.ok) return loadLlm();
+    const data = (await resp.json())?.data as LlmConfig | null;
+    if (valid(data)) {
+      localStorage.setItem(KEY, JSON.stringify(data));
+      return data;
+    }
+    // 后端显式无配置：清掉本地缓存，保持一致
+    localStorage.removeItem(KEY);
+    return null;
+  } catch {
+    return loadLlm();
+  }
 }
 
-export function clearLlm() {
+// 存配置：后端为主，localStorage 同步缓存。后端写失败仍落本地（离线可用）。
+export async function saveLlm(cfg: LlmConfig): Promise<void> {
+  localStorage.setItem(KEY, JSON.stringify(cfg));
+  try {
+    await fetch("/api/ai-config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(cfg),
+    });
+  } catch { /* 后端没起：本地已存，离线仍可用；同步留待下次 */ }
+}
+
+export async function clearLlm(): Promise<void> {
   localStorage.removeItem(KEY);
+  try {
+    await fetch("/api/ai-config", { method: "DELETE", headers: authHeaders() });
+  } catch { /* 后端没起：本地已清 */ }
 }
 
 export function hasLlm(): boolean {
