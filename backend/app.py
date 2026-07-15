@@ -26,6 +26,7 @@ import portfolio as pf
 import market
 import myreports as mr
 import scheduler
+import external
 import aiconfig
 
 app = FastAPI(title="Vibe-Research API", version="0.1.3")
@@ -50,16 +51,25 @@ app.add_middleware(
 # 可选鉴权：设了 VR_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
 #   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
 _API_KEY = os.environ.get("VR_API_KEY", "").strip()
+# 外部接口独立密钥：设了 VR_EXTERNAL_KEY 则 /api/external/* 单独鉴权，与主 key 隔离。
+#   给「其他外部 AI」用——可独立撤销，不影响本机前端 / 内部 /api/* 的鉴权。
+_EXTERNAL_KEY = os.environ.get("VR_EXTERNAL_KEY", "").strip()
 
 
 @app.middleware("http")
 async def _require_api_key(request: Request, call_next):
-    if (
-        _API_KEY
-        and request.method != "OPTIONS"
-        and request.url.path.startswith("/api/")
-        and request.url.path != "/api/health"
-    ):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    path = request.url.path
+    if path == "/api/health":
+        return await call_next(request)
+    # /api/external/* 走独立外部密钥（与主 VR_API_KEY 互不影响）
+    if path.startswith("/api/external/"):
+        if _EXTERNAL_KEY and request.headers.get("authorization", "") != f"Bearer {_EXTERNAL_KEY}":
+            return JSONResponse({"detail": "未授权：缺少或错误的外部接口密钥（VR_EXTERNAL_KEY）"}, status_code=401)
+        return await call_next(request)
+    # 其余 /api/* 走主密钥
+    if _API_KEY and path.startswith("/api/"):
         if request.headers.get("authorization", "") != f"Bearer {_API_KEY}":
             return JSONResponse({"detail": "未授权：缺少或错误的 API Key（VR_API_KEY）"}, status_code=401)
     return await call_next(request)
@@ -77,6 +87,26 @@ def _validate(code: str) -> str:
 @app.get("/api/health")
 def health():
     return {"ok": True, "service": "vibe-research-api", "version": "0.1.3"}
+
+
+# ---- 外部接口：给其他外部 AI 一次性拿全量数据 ----
+# 鉴权：独立 VR_EXTERNAL_KEY（设了才校验，与主 VR_API_KEY 隔离）。
+# 返回：全市场快照（指数/情绪/成交额/行业/资讯雷达/持仓）+ 可选指定股票全维度。
+@app.get("/api/external/snapshot")
+def external_snapshot(codes: str = Query("", description="逗号分隔的 6 位 A 股代码，最多 10 只，对其展开全维度；留空只返回市场快照")):
+    """外部数据聚合：一次调用拿全市场快照 + 指定股票全维度。
+
+    - 不传 codes：返回全市场快照（大盘指数 / 市场情绪 / 成交额榜 / 全球指数 / 行业排名 /
+      资讯雷达 / 持仓），无个股全维度。
+    - 传 codes=600519,000858：额外对每只股票展开全部维度（行情 / 估值 / 财报 / 研报 / 新闻 /
+      资金面 / 龙虎榜 / ... 共 20 项），每项独立容错——某维度缺依赖或源超时返回
+      {"error":...}，不阻塞其他维度。
+
+    限流：codes 上限 10 只，超出截断并在返回的 warnings 里提示。
+    鉴权：需 `Authorization: Bearer <VR_EXTERNAL_KEY>`（未设该环境变量则开放，仅本地自托管适用）。
+    """
+    code_list = [c.strip() for c in codes.split(",") if c.strip()] if codes else []
+    return {"data": external.build_snapshot(code_list)}
 
 
 class LLMConfig(BaseModel):
