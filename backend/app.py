@@ -1,7 +1,7 @@
-"""Vibe-Research 后端 —— A股数据层 HTTP 接口（FastAPI）。
+"""Vibe-Research 后端 —— A股数据层与每日研究 HTTP 接口（FastAPI）。
 
 端点全部在 /api 下，前端 vite 代理 /api → localhost:8900。
-只读、无状态、按用户传入代码返回客观数据。不预置标的、不建议。
+普通数据端点按用户传入代码返回客观数据；每日荐股端点会持久化本地研究报告。
 
 启动：
     uvicorn app:app --host 127.0.0.1 --port 8900
@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import astock
+import daily_recommendation
 import chat as chat_layer
 import cli_runtime
 import gstock
@@ -36,7 +37,15 @@ pf.start_scheduler(1800)
 
 # 通用定时任务调度：注册「资讯雷达定时刷新」（默认关，用户在「定时任务」页开启并设间隔）
 scheduler.register("radar", "资讯雷达刷新", newsradar.fetch_radar, 1800)
-scheduler.start()
+scheduler.register_daily(
+    "daily-recommendation",
+    "每日荐股研究",
+    lambda: daily_recommendation.generate_daily_report(force=True),
+    "20:00",
+    default_enabled=True,
+)
+if os.environ.get("VR_DISABLE_SCHEDULER", "").strip().lower() not in ("1", "true", "yes"):
+    scheduler.start()
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
@@ -315,6 +324,7 @@ def radar_refresh():
 class TaskUpdate(BaseModel):
     enabled: bool | None = None
     interval_sec: int | None = None
+    daily_time: str | None = None
 
 
 @app.get("/api/tasks")
@@ -325,8 +335,16 @@ def tasks_list():
 
 @app.put("/api/tasks/{key}")
 def tasks_update(key: str, u: TaskUpdate):
-    """开关 / 改间隔。间隔最低 60s。"""
-    res = scheduler.set_task(key, enabled=u.enabled, interval_sec=u.interval_sec)
+    """开关 / 改间隔 / 改每日北京时间。"""
+    try:
+        res = scheduler.set_task(
+            key,
+            enabled=u.enabled,
+            interval_sec=u.interval_sec,
+            daily_time=u.daily_time,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     if res is None:
         raise HTTPException(404, f"未知任务：{key}")
     return {"data": res}
@@ -335,12 +353,43 @@ def tasks_update(key: str, u: TaskUpdate):
 @app.post("/api/tasks/{key}/run")
 def tasks_run(key: str):
     """手动立即执行一次（同步等待回调，资讯雷达约 20-40s）。"""
-    res = scheduler.run_once(key)
+    try:
+        res = scheduler.run_once(key)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"任务执行失败：{e}") from e
     if res is None:
         raise HTTPException(404, f"未知任务：{key}")
     if res.get("last_status") == "error":
         raise HTTPException(502, f"任务执行失败：{res.get('last_error')}")
     return {"data": res}
+
+
+# ---- 每日荐股研究（五方向 × 每方向五股票 × 研报正文）----
+
+@app.get("/api/daily-recommendation")
+def daily_recommendation_dashboard(history: int = Query(30, ge=1, le=100)):
+    """最近一次荐股研究报告 + 历史摘要。无报告时 latest=null。"""
+    return {"data": daily_recommendation.get_dashboard(history)}
+
+
+@app.post("/api/daily-recommendation/generate")
+def daily_recommendation_generate(force: bool = Query(True)):
+    """立即生成今日报告；force=true 会覆盖同日已有报告。"""
+    try:
+        return {"data": daily_recommendation.generate_daily_report(force=force)}
+    except daily_recommendation.RecommendationError as e:
+        raise HTTPException(502, f"每日荐股生成失败：{e}") from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"每日荐股生成异常：{e}") from e
+
+
+@app.get("/api/daily-recommendation/{report_date}")
+def daily_recommendation_by_date(report_date: str):
+    """按 YYYY-MM-DD 读取历史荐股研究报告。"""
+    report = daily_recommendation.get_report(report_date)
+    if not report:
+        raise HTTPException(404, "该日期没有荐股报告")
+    return {"data": report}
 
 
 @app.get("/api/market/overview")

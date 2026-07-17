@@ -5,6 +5,7 @@ import {
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, UserRound,
   Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText,
   Clock,
+  Trophy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -15,6 +16,7 @@ const SITE_URL = "https://www.simonlin.net"; // 作者主页
 
 const NAV = [
   { to: "/daily-review", icon: Activity, label: "每日复盘" },
+  { to: "/daily-recommendation", icon: Trophy, label: "每日荐股" },
   { to: "/intel", icon: Radar, label: "资讯雷达" },
   { to: "/sectors", icon: LayoutGrid, label: "板块中心" },
   { to: "/stock-data", icon: Search, label: "个股数据" },
@@ -153,7 +155,7 @@ export function Layout() {
                 联系作者 · simonlin.net
               </a>
               <p className="text-[11px] leading-relaxed text-muted-foreground/60">
-                {APP_VERSION} · 不荐股 · 不预测 · 无倾向
+                {APP_VERSION} · 公开数据 · AI 研究 · 风险自担
               </p>
             </>
           )}

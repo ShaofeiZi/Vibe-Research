@@ -27,11 +27,12 @@ function StatusBadge({ s }: { s: TaskState["last_status"] }) {
   return <span className="text-xs text-muted-foreground/60">未执行</span>;
 }
 
-function TaskCard({ task, manualRunning, onToggle, onInterval, onRun }: {
+function TaskCard({ task, manualRunning, onToggle, onInterval, onDailyTime, onRun }: {
   task: TaskState;
   manualRunning: boolean;
   onToggle: (key: string, enabled: boolean) => void;
   onInterval: (key: string, sec: number) => void;
+  onDailyTime: (key: string, time: string) => void;
   onRun: (key: string) => void;
 }) {
   const running = task.last_status === "running" || manualRunning;
@@ -43,6 +44,9 @@ function TaskCard({ task, manualRunning, onToggle, onInterval, onRun }: {
             <Clock className={cn("h-4 w-4", task.enabled ? "text-primary" : "text-muted-foreground/60")} />
             <h3 className="font-semibold">{task.name}</h3>
             <code className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">{task.key}</code>
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+              {task.schedule_type === "daily" ? `每日 ${task.daily_time || "—"}（北京时间）` : "固定间隔"}
+            </span>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
@@ -61,20 +65,32 @@ function TaskCard({ task, manualRunning, onToggle, onInterval, onRun }: {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* 间隔选择 */}
-          <select
-            value={INTERVAL_OPTS.find((o) => o.sec === task.interval_sec)?.sec ?? -1}
-            onChange={(e) => onInterval(task.key, Number(e.target.value))}
-            disabled={running}
-            className="rounded-lg border border-border bg-black/20 px-2.5 py-1.5 text-xs outline-none focus:border-primary/50 disabled:opacity-50"
-          >
-            {INTERVAL_OPTS.map((o) => (
-              <option key={o.sec} value={o.sec}>{o.label}</option>
-            ))}
-            {!INTERVAL_OPTS.some((o) => o.sec === task.interval_sec) && (
-              <option value={-1} disabled>{Math.round(task.interval_sec / 60)} 分钟</option>
-            )}
-          </select>
+          {task.schedule_type === "daily" ? (
+            <label className="flex items-center gap-1.5 rounded-lg border border-border bg-black/20 px-2.5 py-1 text-xs text-muted-foreground">
+              北京时间
+              <input
+                type="time"
+                value={task.daily_time || "20:00"}
+                onChange={(e) => onDailyTime(task.key, e.target.value)}
+                disabled={running}
+                className="bg-transparent font-mono text-foreground outline-none disabled:opacity-50"
+              />
+            </label>
+          ) : (
+            <select
+              value={INTERVAL_OPTS.find((o) => o.sec === task.interval_sec)?.sec ?? -1}
+              onChange={(e) => onInterval(task.key, Number(e.target.value))}
+              disabled={running}
+              className="rounded-lg border border-border bg-black/20 px-2.5 py-1.5 text-xs outline-none focus:border-primary/50 disabled:opacity-50"
+            >
+              {INTERVAL_OPTS.map((o) => (
+                <option key={o.sec} value={o.sec}>{o.label}</option>
+              ))}
+              {!INTERVAL_OPTS.some((o) => o.sec === task.interval_sec) && (
+                <option value={-1} disabled>{Math.round(task.interval_sec / 60)} 分钟</option>
+              )}
+            </select>
+          )}
 
           {/* 手动执行 */}
           <button
@@ -150,6 +166,20 @@ export function Tasks() {
     }
   };
 
+  const onDailyTime = async (key: string, dailyTime: string) => {
+    const prev = tasks;
+    setTasks((items) => items.map((task) => (
+      task.key === key ? { ...task, daily_time: dailyTime } : task
+    )));
+    try {
+      const updated = await api.updateTask(key, { daily_time: dailyTime });
+      setTasks((items) => items.map((task) => (task.key === key ? updated : task)));
+    } catch (e) {
+      setTasks(prev);
+      setErr(e instanceof ApiError ? e.message : "设置执行时刻失败");
+    }
+  };
+
   const onRun = async (key: string) => {
     setRunning(key);
     // 立即把状态置 running，UI 即时反馈（实际状态靠轮询修正）
@@ -174,7 +204,7 @@ export function Tasks() {
         <Clock className="mt-0.5 h-4 w-4 shrink-0 text-primary/70" />
         <span>
           开启后，后端会按设定间隔自动抓取并更新缓存；你随时打开对应页面看到的都是最新数据。
-          间隔最低 1 分钟（防过频把数据源打爆）。状态每 15 秒自动刷新一次。
+          间隔任务最低 1 分钟（防过频把数据源打爆）；每日任务按北京时间固定时刻执行。状态每 15 秒自动刷新一次。
         </span>
       </div>
 
@@ -195,6 +225,7 @@ export function Tasks() {
               manualRunning={running === t.key}
               onToggle={onToggle}
               onInterval={onInterval}
+              onDailyTime={onDailyTime}
               onRun={onRun}
             />
           ))}

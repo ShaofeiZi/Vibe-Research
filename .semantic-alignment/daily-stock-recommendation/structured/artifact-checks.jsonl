@@ -1,0 +1,5 @@
+{"Artifact": "backend/scheduler.py, backend/app.py, frontend/src/pages/Tasks.tsx", "Checked against": "R1", "Concrete note": "daily-recommendation 默认启用并按北京时间20:00运行；支持UI修改时刻；离线测试覆盖next_run、时间校验和晚间force刷新。", "ID": "K1", "Result": "pass"}
+{"Artifact": "backend/daily_recommendation.py and /tmp/tmp.kBSDhqVupz/daily-recommendations/latest.json", "Checked against": "R2", "Concrete note": "当前代码真实端到端产出5个方向、每方向5只、共25只互不重复候选；最终002739属于候选池；生成前有机械结构校验。", "ID": "K2", "Result": "pass"}
+{"Artifact": "backend/daily_recommendation.py and final E2E output", "Checked against": "R3", "Concrete note": "真实端到端25/25候选研报PDF正文读取成功；最终标的读取3份研报，均有PDF链接、正文摘录和逐篇分析。", "ID": "K3", "Result": "pass"}
+{"Artifact": "backend/daily_recommendation.py, backend/tests/test_daily_recommendation.py", "Checked against": "R4", "Concrete note": "行情、方向强度、资金、当日消息和研报形成可解释评分；AI被限制在候选池，缺失/越界/字段残缺均明确降级；最终E2E降级提示可见。", "ID": "K4", "Result": "pass"}
+{"Artifact": "frontend/src/pages/DailyRecommendation.tsx, README.md, backend/README.md", "Checked against": "R5", "Concrete note": "独立页面显示证据时间、分析模式、风险、失效条件和强免责声明；普通页面定位与公开文档已同步。", "ID": "K5", "Result": "pass"}

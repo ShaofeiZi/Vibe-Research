@@ -11,6 +11,7 @@ import { MyReports } from "@/pages/MyReports";
 import { Notes } from "@/pages/Notes";
 import { Settings } from "@/pages/Settings";
 import { Tasks } from "@/pages/Tasks";
+import { DailyRecommendation } from "@/pages/DailyRecommendation";
 
 export const router = createBrowserRouter([
   {
@@ -18,6 +19,7 @@ export const router = createBrowserRouter([
     children: [
       { path: "/", element: <Navigate to="/daily-review" replace /> },
       { path: "/daily-review", element: <DailyReview /> },
+      { path: "/daily-recommendation", element: <DailyRecommendation /> },
       { path: "/intel", element: <Intel /> },
       { path: "/sectors", element: <Sectors /> },
       { path: "/sectors/:key", element: <SectorDetail /> },

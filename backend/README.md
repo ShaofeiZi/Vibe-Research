@@ -1,6 +1,6 @@
 # Vibe-Research Backend
 
-A股数据层 + 可插拔 AI 层。全部只读、无状态；不预置任何标的、不推荐、不预测。
+A股数据层 + 可插拔 AI 层。普通数据端点保持只读、中立；独立的每日荐股服务会按公开证据构建 5×5 候选池，并调用用户配置的 AI 给出一只短线观察标的。
 
 ## 安装
 
@@ -10,7 +10,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-> 行情 + 研报只需 `fastapi / uvicorn / requests`（秒装、必可用）。
+> 行情 + 研报只需 `fastapi / uvicorn / requests`；每日荐股读取研报 PDF 正文还需 `pypdf`（已在 requirements 中）。
 > 一致预期 / 新闻 / 公告需 `akshare`，K线 / 财务需 `mootdx`；未装时对应端点返回 501 + 安装提示，不影响其余功能。
 
 ## 1. HTTP API（给网页前端 + 系统 AI）
@@ -35,6 +35,10 @@ python3 -m venv .venv
 | **资金面·筹码·信号（v3.3）** | `/api/margin` · `/block-trade` · `/holders` · `/dividend` · `/fund-flow` · `/dragon-tiger` · `/lockup` · `/blocks` · `/hot-concepts` · `/investor-qa` · `/industry` | requests |
 | `GET /api/market/overview` · `/api/radar` | 市场情绪+板块资金 · 资讯雷达 | akshare / stdlib |
 | `POST /api/chat` | 系统 AI 对话（function calling，AI 自己调数据工具） | requests |
+| `GET /api/daily-recommendation` | 最新每日荐股报告 + 历史摘要 | requests+pypdf |
+| `GET /api/daily-recommendation/{YYYY-MM-DD}` | 按日期读取历史报告 | — |
+| `POST /api/daily-recommendation/generate` | 立即重建今日 5×5 候选与研报分析 | requests+pypdf+用户 AI（可降级） |
+| `GET/PUT /api/tasks` | 间隔任务 / 北京时间每日固定任务配置 | — |
 
 > 上表为主要端点；完整路由清单见 `app.py`。要更全量的 A 股数据（打板 / ETF期权 / 全市场行业排名等），用根目录 [`a-stock-data/`](../a-stock-data/SKILL.md) 工具箱。
 
@@ -48,7 +52,18 @@ python3 -m venv .venv
 ```
 `llm` 由前端从本地配置随请求带上，后端不持久化 key。
 
-## 2. MCP Server（给 Claude Code / 高手 agent）
+## 2. 每日荐股任务
+
+- 默认每天北京时间 `20:00` 自动执行并默认开启；可在网页「定时任务」页修改时间或关闭。
+- 每次先刷新资讯雷达，再按行业涨幅、上涨广度、板块资金和关联消息筛选五个方向。
+- 每个方向从真实板块成分中保留五只候选；每只候选必须成功读取至少一份最新研报 PDF 正文。
+- 用户配置的 AI 只能从这 25 只中选择最终标的，后端会校验代码不能越出候选池。
+- 最终标的最多读取三份最新研报，保存原 PDF 链接、正文摘录和逐篇分析。
+- 未配置 AI 或调用失败时会明确标记 `quantitative_fallback`，使用可解释量化排序，不伪造模型结论。
+- 报告存于 `~/.vibe-research/daily-recommendations/`；可用 `VR_DATA_DIR` 更换根目录。
+- 后端进程必须持续运行，daemon 线程才能在设定时刻触发。`VR_DISABLE_SCHEDULER=1` 可在测试或一次性进程中禁用后台调度。
+
+## 3. MCP Server（给 Claude Code / 高手 agent）
 
 零第三方依赖，复用同一套数据工具。挂进 Claude Code：
 
@@ -71,6 +86,7 @@ MCP 的 4 个工具是「零配置、开箱即用」的常用项。若 agent 需
 
 ## 合规
 
-- 数据端点只返回客观行情/研报/财报/新闻，不含任何建议、排名、预测。
+- 普通数据端点只返回客观行情/研报/财报/新闻，不含建议或预测。
 - `/api/chat` 的 system prompt 内置中立红线：不荐股、不预测涨跌、不给买卖时机、不构成投资建议。
-- 分析结论一律由用户配置的模型 / agent 给出，本产品只提供数据与工具。
+- 每日荐股是独立的高风险研究端点：只给下一交易日观察标的，不给目标价、买卖时机或收益承诺，并强制输出风险与失效条件。
+- 模型、研报和公开数据都可能错误或滞后，所有结论必须由用户独立核实。

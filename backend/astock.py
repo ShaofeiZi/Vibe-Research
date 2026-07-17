@@ -548,6 +548,48 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
     } for d in diff]
 
 
+def industry_constituents(board_code: str, n: int = 50) -> list[dict]:
+    """行业板块成分股（按成交额降序）。
+
+    ``board_code`` 为东财行业板块代码（如 BK1036）。实时源不可达时自动降级延迟行情源。
+    返回字段与 ``market_turnover_rank`` 对齐，供需要按行业构建客观候选池的上层使用。
+    """
+    code = str(board_code or "").strip().upper()
+    if not re.fullmatch(r"BK\d{4}", code):
+        return []
+    params = {
+        "pn": 1, "pz": min(max(int(n), 5), 100), "po": 1, "np": 1,
+        "fltt": 2, "invt": 2, "fid": "f6", "fs": f"b:{code} f:!50",
+        "fields": "f12,f14,f2,f3,f6,f20,f21,f100",
+    }
+    diff: list[dict] = []
+    for host in ("push2.eastmoney.com", "push2delay.eastmoney.com"):
+        try:
+            response = em_get(
+                f"https://{host}/api/qt/clist/get",
+                params=params,
+                headers={"User-Agent": UA},
+                timeout=12,
+            )
+            diff = (response.json().get("data") or {}).get("diff") or []
+            if diff:
+                break
+        except Exception:
+            continue
+    if isinstance(diff, dict):
+        diff = list(diff.values())
+    return [{
+        "code": str(item.get("f12", "")),
+        "name": item.get("f14", ""),
+        "price": _numf(item.get("f2")),
+        "pct": _numf(item.get("f3")),
+        "amount": _numf(item.get("f6")),
+        "mcap": _numf(item.get("f20")),
+        "float_cap": _numf(item.get("f21")),
+        "industry": item.get("f100", "") or "",
+    } for item in diff if str(item.get("f12", "")).isdigit()]
+
+
 def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str = "",
                          page_size: int = 50, sort_columns: str = "", sort_types: str = "-1") -> list[dict]:
     """东财数据中心统一查询 —— 龙虎榜/解禁/融资融券/大宗交易/股东户数/分红 共用（已内置限流）。"""
@@ -799,12 +841,20 @@ def industry_comparison(top_n: int = 20) -> dict:
     params = {"pn": "1", "pz": "100", "po": "1", "np": "1", "fltt": "2", "invt": "2",
               "fid": "f3",  # fid=f3 + po=1：按涨跌幅降序，否则 top/bottom 切片非涨幅序（a-stock-data §3.7）
               "fs": "m:90+t:2", "fields": "f2,f3,f4,f12,f13,f14,f104,f105,f128,f136,f140,f141,f207"}
-    try:
-        d = em_get("https://push2.eastmoney.com/api/qt/clist/get",
-                   params=params, headers={"User-Agent": UA}, timeout=15).json()
-    except Exception:
-        return {"top": [], "bottom": [], "total": 0}
-    items = d.get("data", {}).get("diff", [])
+    items: list[dict] | dict = []
+    for host in ("push2.eastmoney.com", "push2delay.eastmoney.com"):
+        try:
+            response = em_get(
+                f"https://{host}/api/qt/clist/get",
+                params=params,
+                headers={"User-Agent": UA},
+                timeout=15,
+            )
+            items = (response.json().get("data") or {}).get("diff") or []
+            if items:
+                break
+        except Exception:
+            continue
     if isinstance(items, dict):
         items = list(items.values())
     if not items:

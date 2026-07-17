@@ -178,9 +178,89 @@ export interface RadarData {
 // 定时任务（资讯雷达定时刷新等）
 export interface TaskState {
   key: string; name: string;
+  schedule_type: "interval" | "daily";
   enabled: boolean; interval_sec: number;
+  daily_time: string | null;
   last_run: string | null; last_status: "ok" | "error" | "running" | null;
   last_error: string | null; next_run_est: string | null;
+}
+
+export interface RecommendationReportAnalysis {
+  info_code: string;
+  summary: string;
+  positive_factors: string[];
+  risk_factors: string[];
+  forecast_assumptions: string[];
+}
+export interface RecommendationReport {
+  info_code: string; title: string; publish_date: string;
+  organization: string; researcher: string; rating: string; industry: string;
+  predicted_eps: Record<string, number | null>;
+  predicted_pe: Record<string, number | null>;
+  pages: number; pdf_url: string | null;
+  read_status: "ok" | "empty" | "unavailable";
+  pages_read: number; excerpt: string; read_error: string | null;
+  analysis?: RecommendationReportAnalysis;
+}
+export interface RecommendationCandidate {
+  rank: number; code: string; name: string;
+  price: number | null; change_pct: number | null; amount: number | null;
+  market_cap: number | null; float_market_cap: number | null; industry: string;
+  pe_ttm: number | null; pb: number | null;
+  turnover_pct: number | null; volume_ratio: number | null;
+  score: number; score_breakdown: Record<string, unknown>;
+  report: RecommendationReport | null;
+}
+export interface RecommendationNews {
+  title: string; source: string; time: string; url: string;
+  scope: "direction" | "market";
+}
+export interface RecommendationDirection {
+  rank: number; name: string; board_code: string; industry_rank: number;
+  change_pct: number | null; up_count: number; down_count: number; breadth: number;
+  fund_flow: SectorFlow | null; news: RecommendationNews[];
+  score: number; score_breakdown: Record<string, number>;
+  stocks: RecommendationCandidate[];
+}
+export interface FinalRecommendation {
+  code: string; name: string; direction: string; confidence: string; horizon: string;
+  thesis: string; market_analysis: string; direction_analysis: string;
+  candidate_comparison: string; catalysts: string[]; risks: string[];
+  invalidation_conditions: string[];
+  report_analysis: {
+    overall: string; consensus: string; differences: string;
+    key_assumptions: string[]; report_risks: string[];
+  };
+  reports: RecommendationReport[];
+}
+export interface DailyRecommendationReport {
+  version: number; date: string; generated_at: string;
+  analysis_mode: "ai" | "quantitative_fallback";
+  warnings: string[];
+  market: {
+    indices: IndexQuote[];
+    sentiment: Partial<MarketSentiment>;
+    leading_fund_flows: SectorFlow[];
+    lagging_fund_flows: SectorFlow[];
+    updated: string | null;
+  };
+  source_summary: {
+    radar_generated_at: string | null; radar_items: number;
+    candidate_reports_read: number; candidate_reports_total: number;
+    final_reports_read: number; final_reports_total: number;
+  };
+  directions: RecommendationDirection[];
+  recommendation: FinalRecommendation;
+  disclaimer: string;
+}
+export interface RecommendationHistory {
+  date: string; generated_at: string;
+  analysis_mode: "ai" | "quantitative_fallback";
+  code: string; name: string; direction: string; confidence: string;
+}
+export interface RecommendationDashboard {
+  latest: DailyRecommendationReport | null;
+  history: RecommendationHistory[];
 }
 
 export interface Holding {
@@ -252,9 +332,14 @@ export const api = {
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
   tasks: () => get<TaskState[]>("/tasks"),
-  updateTask: (key: string, body: { enabled?: boolean; interval_sec?: number }) =>
+  updateTask: (key: string, body: { enabled?: boolean; interval_sec?: number; daily_time?: string }) =>
     request<TaskState>(`/tasks/${key}`, "PUT", body),
   runTask: (key: string) => request<TaskState>(`/tasks/${key}/run`, "POST"),
+  dailyRecommendation: () => get<RecommendationDashboard>("/daily-recommendation"),
+  recommendationByDate: (date: string) =>
+    get<DailyRecommendationReport>(`/daily-recommendation/${encodeURIComponent(date)}`),
+  generateRecommendation: (force = true) =>
+    request<DailyRecommendationReport>(`/daily-recommendation/generate?force=${force}`, "POST"),
   portfolio: () => get<PortfolioData>("/portfolio"),
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),
